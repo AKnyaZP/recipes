@@ -18,6 +18,12 @@ from rag.hybrid_search import HybridSearch
 from llm.llm import RecipeLLM
 from rag.reranker import RecipeReranker
 
+from dotenv import load_dotenv
+
+_env_path = Path(__file__).resolve().parents[1] / "temp" / ".env"
+if _env_path.exists():
+    load_dotenv(_env_path)
+
 
 logger = getLogger(__name__)
 logger.setLevel("DEBUG")
@@ -380,7 +386,7 @@ class RecipeRAGPipeline:
         self.llm = await loop.run_in_executor(
             None,
             RecipeLLM,
-            "Qwen/Qwen2.5-1.5B-Instruct"
+            os.getenv("MODEL_NAME")
         )
 
         # Выводим информацию о модели

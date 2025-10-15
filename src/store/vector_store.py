@@ -3,6 +3,9 @@ import pickle
 from pathlib import Path
 from typing import List, Dict, Any, Tuple, Optional
 import faiss
+import os
+import dotenv
+
 
 class FAISSVectorStore:
     """

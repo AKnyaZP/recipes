@@ -132,18 +132,14 @@ class RecipeReranker:
         """
         if not docs:
             return []
-
-        # Подготавливаем пары (query, document) для cross-encoder
+        
         pairs = []
         for doc in docs:
-            # Используем название + ингредиенты для переранжирования
             doc_text = f"{doc.get('name', '')} {doc.get('ingredients_text', '')}"
             pairs.append([query, doc_text])
 
-        # Получаем скоры от cross-encoder
         scores = self.model.predict(pairs)
 
-        # Добавляем bonus за точное совпадение названий
         for i, doc in enumerate(docs):
             name_sim = self._calculate_name_similarity(query, doc.get('name', ''))
             scores[i] = 0.7 * scores[i] + 0.3 * name_sim

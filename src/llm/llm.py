@@ -9,17 +9,9 @@ from typing import List, Dict, Any
 import logging
 import asyncio
 import concurrent.futures
-import os
-from pathlib import Path
-from dotenv import load_dotenv
-
-_env_path = Path(__file__).resolve().parents[1] / "temp" / ".env"
-if _env_path.exists():
-    load_dotenv(_env_path)
-
 
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+
 
 class RecipeLLM:
     """
@@ -28,7 +20,7 @@ class RecipeLLM:
     Поддерживает улучшенное форматирование для разных типов запросов.
     """
 
-    def __init__(self, model_name: str = os.getenv("MODEL_NAME")):
+    def __init__(self, model_name: str = "Qwen/Qwen2.5-1.5B-Instruct"):
         """
         Инициализирует LLM модель.
 
@@ -129,14 +121,12 @@ class RecipeLLM:
                 recipe_text = f"""РЕЦЕПТ #{doc_id}: {doc_name}
 ИНГРЕДИЕНТЫ: {ingredients}
 РЕЛЕВАНТНОСТЬ: {score:.3f} из 1.000"""
-                logger.info(f'recipe_text (single_dish): {recipe_text}')
             elif intent == 'multi_dish':
                 # Для нескольких блюд - структурированный формат по блюдам
                 recipe_text = f"""=== БЛЮДО {i}: {doc_name} ===
 ID: {doc_id}
 Ингредиенты: {ingredients}
 Совпадение с запросом: {score:.1%}"""
-                logger.info(f'recipe_text (multi_dish): {recipe_text}')
             else:
                 # Общий формат с описанием
                 description = doc.get('full_text', 'Описание отсутствует')[:200]
@@ -144,7 +134,6 @@ ID: {doc_id}
 Ингредиенты: {ingredients}
 Описание: {description}...
 Релевантность: {score:.3f}"""
-                logger.info(f'recipe_text (general): {recipe_text}')
 
             context_parts.append(recipe_text)
 
@@ -164,8 +153,7 @@ ID: {doc_id}
         intent = self._detect_query_intent(query)
 
         # Базовый шаблон
-        RAG_PROMPT_TEMPLATE = """Отвечай на вопрос пользователя согласно переданному контексту.
-        Контекст рецептов:
+        RAG_PROMPT_TEMPLATE = """Контекст рецептов:
 {context}
 
 Вопрос пользователя: {question}
@@ -186,7 +174,7 @@ ID: {doc_id}
 2. Если пользователь спрашивает об одном конкретном блюде - отвечай ТОЛЬКО о нём
 3. НЕ смешивай ингредиенты разных блюд
 4. Выбери САМОЕ релевантное блюдо из контекста
-5. ВАЖНО: Структурируй ответ: Название блюда → Ингредиенты → Краткое описание
+5. Структурируй ответ: Название блюда → Ингредиенты → Краткое описание
 6. Если нет точного совпадения - честно скажи об этом"""
 
         elif intent == 'multi_dish':
@@ -196,7 +184,7 @@ ID: {doc_id}
 1. Отвечай только на русском языке
 2. Для каждого блюда - отдельный блок с названием
 3. НЕ смешивай ингредиенты разных блюд
-4. ВАЖНО: Формат: "Блюдо 1: ... Блюдо 2: ..." 
+4. Формат: "Блюдо 1: ... Блюдо 2: ..." 
 5. Если блюда нет в контексте - не добавляй его
 6. Используй только предоставленную информацию"""
         else:
@@ -206,7 +194,7 @@ ID: {doc_id}
 1. Отвечай только на русском языке
 2. Используй только информацию из предоставленного контекста
 3. Если в контексте нет нужной информации, честно скажи об этом
-4. ВАЖНО: Структурируй ответ: название блюда, ингредиенты, краткое описание
+4. Структурируй ответ: название блюда, ингредиенты, краткое описание
 5. Будь полезным и дружелюбным"""
 
         # Комбинируем с системным промптом
@@ -239,37 +227,24 @@ ID: {doc_id}
 
         return outputs[0]['generated_text'].strip()
 
-    def generate_response(self, query: str, search_results: List[tuple], use_top: bool = True, top_k: int = 1) -> str:
+    def generate_response(self, query: str, search_results: List[tuple]) -> str:
         """
         Генерирует ответ на запрос пользователя на основе найденных рецептов.
+        ВАЖНО: Этот метод теперь может работать как синхронно, так и асинхронно.
+        - Если вызывается из async контекста, работает асинхронно
+        - Если вызывается из sync контекста, работает синхронно
 
         Args:
             query: Вопрос пользователя
-            search_results: Результаты поиска рецептов (список (doc, score))
-            use_top: если True — использовать только топ-N документов, иначе использовать все
-            top_k: сколько топ-документов использовать (если use_top=True)
+            search_results: Результаты поиска рецептов
 
         Returns:
             Сгенерированный ответ
         """
         logging.info(f"Генерируем ответ для запроса: '{query}'")
 
-        if not search_results:
-            logging.warning("search_results пустой — генерируем ответ без контекста")
-            context = ""
-        else:
-            # Надёжно выбираем топ-к по score (независимо от сортировки входа)
-            if use_top:
-                # защитные проверки
-                top_k = max(1, int(top_k))
-                # сортируем по score (второй элемент кортежа) и берём top_k
-                sorted_by_score = sorted(search_results, key=lambda x: x[1], reverse=True)
-                docs_to_use = sorted_by_score[:top_k]
-            else:
-                docs_to_use = search_results
-
-            # Форматируем контекст только из выбранных документов
-            context = self.format_context(docs_to_use, query)
+        # Форматируем контекст с учетом типа запроса
+        context = self.format_context(search_results, query)
 
         # Создаем адаптивный промпт
         prompt = self.create_prompt(query, context)
@@ -296,8 +271,7 @@ ID: {doc_id}
         except Exception as e:
             logging.error(f"❌ Ошибка генерации: {e}")
             return "Извините, произошла ошибка при генерации ответа. Попробуйте переформулировать вопрос."
-    
-    
+
     def _clean_response(self, response: str) -> str:
         """
         Очищает сгенерированный ответ от нежелательных артефактов.

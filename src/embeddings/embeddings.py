@@ -7,7 +7,6 @@ import asyncio
 import concurrent.futures
 
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
 
 
 class RecipeEmbedder:
@@ -24,62 +23,42 @@ class RecipeEmbedder:
         Args:
             model_name: Название модели из HuggingFace
         """
-        logger.info(f"model_name: {model_name}")
+        logging.info(f"model_name: {model_name}")
 
         device = "cuda" if torch.cuda.is_available() else "cpu"
 
-        logger.info(f"device: {device}")
+        logging.info(f"device: {device}")
 
         # Загружаем модель
         self.model = SentenceTransformer(model_name, device=device)
         self.embedding_dim = self.model.get_sentence_embedding_dimension()
 
-        logger.info(f"✅ Модель загружена. Размерность эмбеддингов: {self.embedding_dim}")
-
-    def _preprocess_texts(self, texts: List[str]) -> List[str]:
-        """
-        Предобработка текстов перед векторизацией.
-
-        Args:
-            texts: Список текстов
-
-        Returns:
-            Обработанные тексты
-        """
-        processed_texts = []
-        for text in texts:
-            if not text or not text.strip():
-                processed_texts.append("[EMPTY]")  # Плейсхолдер для пустых текстов
-            else:
-                processed_texts.append(text.strip())
-        return processed_texts
+        print(f"✅ Модель загружена. Размерность эмбеддингов: {self.embedding_dim}")
 
     def _encode_texts_sync(self, texts: List[str], batch_size: int = 32) -> np.ndarray:
         """
         Внутренний синхронный метод кодирования текстов.
-
-        Args:
-            texts: Список текстов для векторизации
-            batch_size: Размер батча для обработки
-
-        Returns:
-            Матрица эмбеддингов shape=(len(texts), embedding_dim)
         """
-        logger.info(f"🔄 Векторизуем {len(texts)} текстов...")
+        print(f"🔄 Векторизуем {len(texts)} текстов...")
 
         # Предобработка текстов
-        processed_texts = self._preprocess_texts(texts)
+        processed_texts = []
+        for text in texts:
+            if not text or not text.strip():
+                processed_texts.append("[EMPTY]")
+            else:
+                processed_texts.append(text.strip())
 
         # Генерируем эмбеддинги
         embeddings = self.model.encode(
             processed_texts,
             batch_size=batch_size,
             show_progress_bar=True,
-            normalize_embeddings=True,  # Нормализуем для косинусного сходства
+            normalize_embeddings=True,
             convert_to_numpy=True
         )
 
-        logger.info(f"✅ Создано {embeddings.shape[0]} эмбеддингов")
+        print(f"✅ Создано {embeddings.shape[0]} эмбеддингов")
         return embeddings
 
     def encode_texts(self, texts: List[str], batch_size: int = 32) -> np.ndarray:
@@ -108,12 +87,6 @@ class RecipeEmbedder:
     def _encode_query_sync(self, query: str) -> np.ndarray:
         """
         Внутренний синхронный метод кодирования запроса.
-
-        Args:
-            query: Текст запроса
-
-        Returns:
-            Вектор запроса
         """
         if not query.strip():
             query = "[EMPTY]"
@@ -151,13 +124,6 @@ class RecipeEmbedder:
     def _get_similarity_sync(self, text1: str, text2: str) -> float:
         """
         Внутренний синхронный метод вычисления сходства.
-
-        Args:
-            text1: Первый текст
-            text2: Второй текст
-
-        Returns:
-            Коэффициент сходства (0-1)
         """
         emb1 = self._encode_query_sync(text1)
         emb2 = self._encode_query_sync(text2)
@@ -188,4 +154,3 @@ class RecipeEmbedder:
         except RuntimeError:
             # Нет event loop - синхронное выполнение
             return self._get_similarity_sync(text1, text2)
-

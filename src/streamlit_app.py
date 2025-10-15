@@ -1,222 +1,253 @@
 """
-Streamlit UI для асинхронного RAG-пайплайна рецептов.
-Запуск: streamlit run streamlit_app.py --server.port 8501
+Streamlit UI для RAG рецептов с T-one ASR от Т-Банка.
+Запуск: streamlit run streamlit_app.py
 """
 
-import os
 import traceback
-import asyncio
-from typing import Optional
 import streamlit as st
 from rag.rag_pipeline import RecipeRAGPipeline
-import logging
+from streamlit_mic_recorder import mic_recorder
+
+st.set_page_config(
+    page_title="Рецепты с голосовым поиском 🎙️",
+    layout="centered",
+    page_icon="🍽️"
+)
 
 
-st.set_page_config(page_title="Recipes RAG", layout="centered")
+# ===== Pipeline кэширование =====
+@st.cache_resource(show_spinner="🚀 Инициализация RAG системы...")
+def get_pipeline(max_recipes: int = 200):
+    """Создаёт и инициализирует RAG pipeline (один раз)."""
+    pipeline = RecipeRAGPipeline()
+    pipeline.initialize_full_pipeline(max_recipes=max_recipes, force_rebuild=False)
+    return pipeline
 
 
-# ----- Async helper для Streamlit -----
-def run_async(coro):
-    """
-    Запускает асинхронную функцию в синхронном контексте Streamlit.
-    Создает новый event loop если необходимо.
-    """
+# ===== T-one ASR кэширование =====
+@st.cache_resource(show_spinner="🎤 Загрузка T-one модели (70M)...")
+def get_asr():
+    """Загружает T-one ASR модель от Т-Банка."""
     try:
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
-            # Если loop уже запущен, создаём новый
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-    except RuntimeError:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-
-    return loop.run_until_complete(coro)
-
-
-# ----- Pipeline helper -----
-@st.cache_resource
-def get_pipeline():
-    """Возвращает экземпляр пайплайна (кэшируется)."""
-    return RecipeRAGPipeline()
-
-
-def ensure_init_state():
-    """Инициализирует состояние в session_state."""
-    if "pipeline_initialized" not in st.session_state:
-        st.session_state["pipeline_initialized"] = False
-    if "init_error" not in st.session_state:
-        st.session_state["init_error"] = None
-    if "auto_init_done" not in st.session_state:
-        st.session_state["auto_init_done"] = False
-
-
-def initialize_pipeline():
-    """Инициализирует пайплайн с UI feedback (синхронная обертка)."""
-    pipeline = get_pipeline()
-
-    try:
-        progress_bar = st.progress(0, text="Настройка эмбеддера...")
-        run_async(pipeline.setup_embeddings())
-
-        progress_bar.progress(20, text="Загрузка данных...")
-        run_async(pipeline.load_and_process_data(max_recipes=200))
-
-        progress_bar.progress(40, text="Построение векторного индекса...")
-        run_async(pipeline.build_vector_index(force_rebuild=False))
-
-        progress_bar.progress(60, text="Настройка гибридного поиска...")
-        run_async(pipeline.setup_hybrid_search())
-
-        progress_bar.progress(70, text="Настройка реранкера...")
-        run_async(pipeline.setup_reranker())
-
-        progress_bar.progress(90, text="Загрузка LLM...")
-        run_async(pipeline.setup_llm())
-
-        progress_bar.progress(100, text="✅ Инициализация завершена!")
-
-        st.session_state["pipeline_initialized"] = True
-        st.session_state["init_error"] = None
-        st.success("🎉 Система готова к работе!")
-
+        from asr.asr import ToneASR
+        asr = ToneASR(device="auto")
+        return asr
     except Exception as e:
-        st.session_state["init_error"] = traceback.format_exc()
-        st.error(f"❌ Ошибка инициализации: {str(e)}")
-        with st.expander("Подробности ошибки"):
-            st.code(st.session_state["init_error"])
+        st.warning(f"⚠️ T-one недоступен: {e}")
+        st.info("Установите: pip install transformers torch torchaudio soundfile")
+        return None
 
 
-# ----- Main UI -----
-ensure_init_state()
+# ===== Функция обработки запроса =====
+def process_query(pipeline, query_text):
+    """Обрабатывает текстовый запрос и показывает результаты."""
+    with st.spinner("🔍 Поиск рецептов..."):
+        try:
+            result = pipeline.ask(query_text)
 
-st.title("🍽️ Поиск рецептов с RAG")
+            # Ответ системы
+            st.markdown("### 💬 Ответ")
+            st.write(result.get("answer", ""))
 
-# Автоматическая инициализация при первом запуске
-if not st.session_state.get("auto_init_done"):
-    st.info("⏳ Инициализация системы (это произойдёт один раз при запуске)...")
-    initialize_pipeline()
-    st.session_state["auto_init_done"] = True
-    st.rerun()
+            # Найденные рецепты
+            st.markdown("### 📚 Найденные рецепты")
+            search_results = result.get("search_results", [])
 
-pipeline = get_pipeline()
-pipeline_ready = (
-    st.session_state.get("pipeline_initialized", False) and
-    hasattr(pipeline, 'embedder') and pipeline.embedder and
-    hasattr(pipeline, 'hybrid_search') and pipeline.hybrid_search and
-    hasattr(pipeline, 'llm') and pipeline.llm
-)
+            if search_results:
+                for i, item in enumerate(search_results, start=1):
+                    relevance = item.get('relevance_score', 0)
+                    name = item.get('name', 'Без названия')
+
+                    with st.expander(f"{i}. {name} — релевантность: {relevance:.3f}"):
+                        st.markdown("**Ингредиенты:**")
+                        st.text(item.get('ingredients', 'Не указаны'))
+
+                        url = item.get('url')
+                        if url:
+                            st.markdown(f"🔗 [Перейти к рецепту]({url})")
+            else:
+                st.info("Рецепты не найдены")
+
+            # Время обработки
+            with st.expander("⏱️ Время обработки"):
+                timing = result.get("timing", {})
+                col1, col2 = st.columns(2)
+                col1.metric("Общее время", f"{timing.get('total_time', 0):.2f}с")
+                col2.metric("Время поиска", f"{timing.get('search_time', 0):.2f}с")
+
+        except Exception as e:
+            st.error(f"❌ Ошибка: {str(e)}")
+            with st.expander("Подробная информация"):
+                st.code(traceback.format_exc())
+
+
+# ===== MAIN UI =====
+st.title("🍽️ Поиск рецептов")
+st.caption("💬 Текстовый ввод | 🎙️ Голосовой поиск с T-one от Т-Банка")
+
+# Инициализация компонентов
+try:
+    pipeline = get_pipeline(max_recipes=200)
+    asr = get_asr()
+    pipeline_ready = True
+
+    # Статус в sidebar
+    with st.sidebar:
+        st.success("✅ RAG система готова")
+        if asr:
+            st.success("✅ T-one ASR готов")
+        else:
+            st.warning("⚠️ ASR недоступен")
+
+except Exception as e:
+    pipeline_ready = False
+    st.error(f"❌ Ошибка инициализации: {str(e)}")
+    with st.expander("Подробности ошибки"):
+        st.code(traceback.format_exc())
 
 st.markdown("---")
 
-query = st.text_input(
-    "Введите запрос:",
-    value="Как приготовить борщ?",
-    placeholder="Например: рецепт пиццы с грибами",
-    disabled=not pipeline_ready
-)
+# ===== ВКЛАДКИ =====
+if pipeline_ready:
+    tab1, tab2 = st.tabs(["💬 Текстовый ввод", "🎙️ Голосовой ввод"])
 
-search_button = st.button(
-    "🔎 Найти рецепты",
-    type="primary",
-    disabled=not pipeline_ready,
-    use_container_width=True
-)
+    # ===== ВКЛАДКА 1: Текст =====
+    with tab1:
+        query = st.text_input(
+            "Введите запрос:",
+            value="",
+            placeholder="Например: как приготовить борщ",
+            key="text_query"
+        )
 
-if not pipeline_ready:
-    st.warning("⚠️ Система ещё инициализируется. Пожалуйста, подождите...")
+        if st.button("🔎 Найти рецепты", type="primary", use_container_width=True):
+            if query.strip():
+                process_query(pipeline, query)
+            else:
+                st.warning("⚠️ Введите запрос")
 
-if search_button and pipeline_ready:
-    if query.strip():
-        with st.spinner("🔍 Обработка запроса..."):
-            try:
-                # Асинхронный вызов через run_async
-                result = run_async(pipeline.ask(query))
+    # ===== ВКЛАДКА 2: Голос =====
+    with tab2:
+        if not asr:
+            st.warning("⚠️ T-one ASR недоступен")
+            st.info(
+                "Установите зависимости:\n"
+                "```bash\n"
+                "pip install transformers torch torchaudio soundfile librosa\n"
+                "```"
+            )
+        else:
+            st.markdown("### 🎙️ Запись голосового запроса")
+            st.caption("Используется T-one от Т-Банка (70M параметров, open source)")
 
-                # Ответ LLM
-                st.markdown("### 💬 Ответ системы")
-                st.write(result.get("answer", ""))
+            # Кнопка записи
+            audio = mic_recorder(
+                start_prompt="🎤 Начать запись",
+                stop_prompt="⏹️ Остановить",
+                format="wav",
+                use_container_width=True,
+                key='voice_recorder'
+            )
 
-                # Найденные рецепты
-                st.markdown("### 📚 Найденные рецепты")
-                search_results = result.get("search_results", [])
+            if audio:
+                st.audio(audio['bytes'], format='audio/wav')
 
-                if search_results:
-                    for i, item in enumerate(search_results, start=1):
-                        with st.expander(
-                            f"{i}. {item.get('name', '(без названия)')} — релевантность: {item.get('relevance_score', 0):.3f}"
-                        ):
-                            st.markdown(f"**Ингредиенты:**")
-                            st.text(item.get('ingredients', 'Не указаны'))
+                col1, col2 = st.columns([3, 1])
 
-                            if item.get('url'):
-                                st.markdown(f"**Ссылка:** [{item.get('url')}]({item.get('url')})")
-                else:
-                    st.info("Рецепты не найдены")
+                with col1:
+                    if st.button("🔊 Распознать и найти", type="primary", use_container_width=True):
+                        with st.spinner("🎧 Распознаём речь через T-one..."):
+                            try:
+                                # Распознаём через T-one
+                                result_asr = asr.transcribe_bytes(
+                                    audio['bytes'],
+                                    sample_rate=audio.get('sample_rate', 16000)
+                                )
 
-                # Метаданные
-                with st.expander("⏱️ Время обработки"):
-                    timing = result.get("timing", {})
-                    col1, col2 = st.columns(2)
-                    col1.metric("Общее время", f"{timing.get('total_time', 0):.2f}с")
-                    col2.metric("Время поиска", f"{timing.get('search_time', 0):.2f}с")
+                                if result_asr.get('success') and result_asr.get('text'):
+                                    recognized_text = result_asr['text']
+                                    st.success(f"📝 Распознано: **{recognized_text}**")
 
-            except Exception as e:
-                st.error(f"❌ Ошибка при выполнении запроса: {str(e)}")
-                with st.expander("Подробности ошибки"):
-                    st.code(traceback.format_exc())
-    else:
-        st.warning("⚠️ Введите запрос")
+                                    # Автоматический поиск
+                                    process_query(pipeline, recognized_text)
 
-# Статус в футере
+                                else:
+                                    error_msg = result_asr.get('error', 'Речь не распознана')
+                                    st.error(f"❌ {error_msg}")
+
+                            except Exception as e:
+                                st.error(f"❌ Ошибка ASR: {str(e)}")
+                                with st.expander("Подробности"):
+                                    st.code(traceback.format_exc())
+
+                with col2:
+                    if st.button("🗑️ Очистить", use_container_width=True):
+                        st.rerun()
+
+# ===== FOOTER =====
 st.markdown("---")
+
 with st.expander("ℹ️ Информация о системе"):
-    col1, col2, col3, col4 = st.columns(4)
+    if pipeline_ready:
+        col1, col2, col3, col4 = st.columns(4)
 
-    with col1:
-        if hasattr(pipeline, 'documents') and pipeline.documents:
-            st.metric("Документов", len(pipeline.documents))
-        else:
-            st.metric("Документов", "0")
+        with col1:
+            docs = len(pipeline.documents) if hasattr(pipeline, 'documents') else 0
+            st.metric("Рецептов", docs)
 
-    with col2:
-        if hasattr(pipeline, 'vector_store') and pipeline.vector_store:
-            st.metric("FAISS индекс", "✅")
-        else:
-            st.metric("FAISS индекс", "❌")
+        with col2:
+            faiss = "✅" if hasattr(pipeline, 'vector_store') and pipeline.vector_store else "❌"
+            st.metric("FAISS индекс", faiss)
 
-    with col3:
-        if hasattr(pipeline, 'reranker') and pipeline.reranker:
-            st.metric("Реранкер", "✅")
-        else:
-            st.metric("Реранкер", "❌")
+        with col3:
+            asr_status = "✅" if asr else "❌"
+            st.metric("T-one ASR", asr_status)
 
-    with col4:
-        if hasattr(pipeline, 'llm') and pipeline.llm:
-            st.metric("LLM", "✅")
-        else:
-            st.metric("LLM", "❌")
+        with col4:
+            llm = "✅" if hasattr(pipeline, 'llm') and pipeline.llm else "❌"
+            st.metric("LLM", llm)
+    else:
+        st.warning("Система не инициализирована")
 
-# Кнопка переинициализации (опционально)
+# ===== SIDEBAR =====
 with st.sidebar:
     st.header("⚙️ Настройки")
 
     if st.button("🔄 Переинициализировать систему", use_container_width=True):
-        st.session_state["pipeline_initialized"] = False
-        st.session_state["auto_init_done"] = False
         st.cache_resource.clear()
         st.rerun()
 
     st.markdown("---")
     st.markdown("### 📊 Статус компонентов")
 
-    status_items = [
-        ("Эмбеддер", hasattr(pipeline, 'embedder') and pipeline.embedder),
-        ("Векторный индекс", hasattr(pipeline, 'vector_store') and pipeline.vector_store),
-        ("Гибридный поиск", hasattr(pipeline, 'hybrid_search') and pipeline.hybrid_search),
-        ("Реранкер", hasattr(pipeline, 'reranker') and pipeline.reranker),
-        ("LLM", hasattr(pipeline, 'llm') and pipeline.llm),
-    ]
+    if pipeline_ready:
+        components = [
+            ("🔤 Эмбеддер", hasattr(pipeline, 'embedder') and pipeline.embedder),
+            ("📊 Векторный индекс", hasattr(pipeline, 'vector_store') and pipeline.vector_store),
+            ("🔍 Гибридный поиск", hasattr(pipeline, 'hybrid_search') and pipeline.hybrid_search),
+            ("🎯 Реранкер", hasattr(pipeline, 'reranker') and pipeline.reranker),
+            ("🤖 LLM", hasattr(pipeline, 'llm') and pipeline.llm),
+            ("🎙️ T-one ASR", asr is not None),
+        ]
 
-    for name, status in status_items:
-        st.markdown(f"{'✅' if status else '❌'} {name}")
+        for name, status in components:
+            st.markdown(f"{'✅' if status else '❌'} {name}")
+    else:
+        st.error("❌ Система не готова")
+
+    st.markdown("---")
+    st.markdown("### 🎙️ О T-one")
+    st.caption("**T-one** — открытая ASR модель от Т-Банка")
+    st.caption("• 70M параметров")
+    st.caption("• WER < 10% для русского")
+    st.caption("• Работает локально")
+    st.caption("• Open source (Apache 2.0)")
+
+    st.markdown("🔗 [GitHub](https://github.com/voicekit-team/T-one)")
+    st.markdown("🤗 [HuggingFace](https://huggingface.co/t-tech/T-one)")
+
+    st.markdown("---")
+    st.markdown("### 📦 Параметры")
+    st.text("Макс. рецептов: 200")
+    st.text("Модель: all-MiniLM-L6-v2")
+    st.text("LLM: Qwen2.5-1.5B-Instruct")

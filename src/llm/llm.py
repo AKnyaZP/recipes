@@ -9,6 +9,14 @@ from typing import List, Dict, Any
 import logging
 import asyncio
 import concurrent.futures
+import os
+from pathlib import Path
+from dotenv import load_dotenv
+
+_env_path = Path(__file__).resolve().parents[1] / "temp" / ".env"
+if _env_path.exists():
+    load_dotenv(_env_path)
+
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -20,7 +28,7 @@ class RecipeLLM:
     Поддерживает улучшенное форматирование для разных типов запросов.
     """
 
-    def __init__(self, model_name: str = "Qwen/Qwen2.5-1.5B-Instruct"):
+    def __init__(self, model_name: str = os.getenv("MODEL_NAME")):
         """
         Инициализирует LLM модель.
 

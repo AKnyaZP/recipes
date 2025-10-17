@@ -56,6 +56,7 @@ lazy_loader==0.4
 librosa==0.11.0
 llvmlite==0.45.1
 logging==0.4.9.6
+loguru==0.7.3
 lxml==6.0.2
 MarkupSafe==3.0.2
 marshmallow==3.26.1
@@ -136,6 +137,7 @@ unstructured-client==0.42.3
 urllib3==2.5.0
 watchdog==6.0.0
 webencodings==0.5.1
+win32_setctime==1.2.0
 wrapt==1.17.3
 xxhash==3.5.0
 yarl==1.20.1

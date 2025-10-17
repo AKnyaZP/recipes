@@ -6,11 +6,11 @@ from transformers import (
     GenerationConfig
 )
 from typing import List, Dict, Any
-import logging
+from loguru import logger
 import asyncio
 import concurrent.futures
 
-logging.basicConfig(level=logging.INFO)
+
 
 
 class RecipeLLM:
@@ -27,11 +27,11 @@ class RecipeLLM:
         Args:
             model_name: Название модели из HuggingFace
         """
-        logging.info(f"model_name: {model_name}")
+        logger.info(f"model_name: {model_name}")
 
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
 
-        logging.info(f"device: {self.device}")
+        logger.info(f"device: {self.device}")
 
         self.tokenizer = AutoTokenizer.from_pretrained(
             model_name,
@@ -39,15 +39,12 @@ class RecipeLLM:
             trust_remote_code=True
         )
 
-        # Настраиваем токены padding'а если нужно
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
 
-        # Определяем тип данных для модели
         torch_dtype = torch.bfloat16 if torch.cuda.is_available() else torch.float32
 
-        # Загружаем модель
-        logging.info("downloading LLM...")
+        logger.info("downloading LLM...")
         self.model = AutoModelForCausalLM.from_pretrained(
             model_name,
             torch_dtype=torch_dtype,
@@ -71,7 +68,7 @@ class RecipeLLM:
             do_sample=True
         )
 
-        logging.info("LLM initialized")
+        logger.info("LLM initialized")
 
     def _detect_query_intent(self, query: str) -> str:
         """
@@ -165,7 +162,6 @@ ID: {doc_id}
             question=query
         )
 
-        # Адаптивные системные правила
         if intent == 'single_dish':
             SYSTEM_PROMPT = """Ты помощник в кулинарии. Отвечай строго по одному блюду из контекста.
 
@@ -197,10 +193,7 @@ ID: {doc_id}
 4. Структурируй ответ: название блюда, ингредиенты, краткое описание
 5. Будь полезным и дружелюбным"""
 
-        # Комбинируем с системным промптом
-        # Разные модели требуют разного форматирования
         if "Qwen" in self.model.config.name_or_path or "qwen" in self.model.config.name_or_path.lower():
-            # Формат для Qwen модели
             full_prompt = f"<|im_start|>system\n{SYSTEM_PROMPT}<|im_end|>\n<|im_start|>user\n{main_prompt}<|im_end|>\n<|im_start|>assistant\n"
         else:
             # Общий формат
@@ -222,7 +215,7 @@ ID: {doc_id}
             prompt,
             num_return_sequences=1,
             pad_token_id=self.tokenizer.eos_token_id,
-            return_full_text=False  # Возвращаем только новый текст
+            return_full_text=False 
         )
 
         return outputs[0]['generated_text'].strip()
@@ -241,35 +234,27 @@ ID: {doc_id}
         Returns:
             Сгенерированный ответ
         """
-        logging.info(f"Генерируем ответ для запроса: '{query}'")
+        logger.info(f"Генерируем ответ для запроса: '{query}'")
 
-        # Форматируем контекст с учетом типа запроса
         context = self.format_context(search_results, query)
-
-        # Создаем адаптивный промпт
         prompt = self.create_prompt(query, context)
 
-        # Генерируем ответ
         try:
-            # Проверяем, находимся ли мы в async контексте
             try:
                 loop = asyncio.get_running_loop()
-                # Если есть running loop, используем асинхронный подход
                 with concurrent.futures.ThreadPoolExecutor() as executor:
                     future = executor.submit(self._generate_sync, prompt)
                     response = future.result()
             except RuntimeError:
-                # Нет running loop - работаем синхронно
                 response = self._generate_sync(prompt)
 
-            # Очищаем ответ от артефактов
             response = self._clean_response(response)
 
-            logging.info("✅ Ответ сгенерирован")
+            logger.info("Ответ сгенерирован")
             return response
 
         except Exception as e:
-            logging.error(f"❌ Ошибка генерации: {e}")
+            logger.error(f"Ошибка генерации: {e}")
             return "Извините, произошла ошибка при генерации ответа. Попробуйте переформулировать вопрос."
 
     def _clean_response(self, response: str) -> str:
@@ -282,12 +267,10 @@ ID: {doc_id}
         Returns:
             Очищенный ответ
         """
-        # Удаляем специальные токены если они остались
         response = response.replace("<|im_end|>", "").replace("<|im_start|>", "")
 
-        # Обрезаем на точке если ответ слишком длинный
         sentences = response.split('.')
-        if len(sentences) > 4:  # Увеличено с 3 до 4 для более полных ответов
+        if len(sentences) > 4: 
             response = '. '.join(sentences[:4]) + '.'
 
         # Удаляем лишние пробелы

@@ -21,21 +21,18 @@ class HybridSearch:
         self.vector_store = vector_store
         self.documents = documents
         
-        print("🔍 Инициализируем гибридный поиск...")
+        print("Инициализируем гибридный поиск...")
         
-        # Готовим тексты для BM25
         self.corpus_tokens = []
         for doc in documents:
-            # Используем полный текст рецепта для BM25
             text = doc.get('full_text', '') + ' ' + doc.get('name', '')
             tokens = self._tokenize(text)
             self.corpus_tokens.append(tokens)
         
-        # Строим BM25 индекс
-        print(f"📝 Строим BM25 индекс из {len(self.corpus_tokens)} документов...")
+        print(f"Строим BM25 индекс из {len(self.corpus_tokens)} документов...")
         self.bm25 = BM25Okapi(self.corpus_tokens)
         
-        print("✅ Гибридный поиск готов!")
+        print("Гибридный поиск готов!")
     
     def _tokenize(self, text: str) -> List[str]:
         """
@@ -51,19 +48,10 @@ class HybridSearch:
         if not text:
             return []
         
-        # Приводим к нижнему регистру
         text = text.lower()
-        
-        # Заменяем дефисы и подчеркивания на пробелы
         text = re.sub(r'[-_]', ' ', text)
-        
-        # Оставляем только буквы, цифры и пробелы (поддержка кириллицы)
         text = re.sub(r'[^\w\s]', ' ', text, flags=re.UNICODE)
-        
-        # Разбиваем на токены
         tokens = text.split()
-        
-        # Фильтруем слишком короткие токены
         tokens = [token for token in tokens if len(token) >= 2]
         
         return tokens
@@ -92,23 +80,19 @@ class HybridSearch:
         Returns:
             Список (документ, скор)
         """
-        # Токенизируем запрос
         query_tokens = self._tokenize(query)
         
         if not query_tokens:
             return []
-        
-        # Получаем скоры BM25
+
         scores = self.bm25.get_scores(query_tokens)
         
-        # Сортируем по убыванию скора
         scored_docs = [(i, score) for i, score in enumerate(scores)]
         scored_docs.sort(key=lambda x: x[1], reverse=True)
-        
-        # Возвращаем топ-k результатов
+ 
         results = []
         for i, (doc_idx, score) in enumerate(scored_docs[:k]):
-            if score > 0:  # Только документы с положительным скором
+            if score > 0: 
                 doc = self.documents[doc_idx].copy()
                 results.append((doc, float(score)))
         
@@ -133,23 +117,18 @@ class HybridSearch:
         Returns:
             Список (документ, комбинированный_скор) отсортированный по убыванию скора
         """
-        print(f"🔍 Гибридный поиск: '{query}' (α={alpha})")
+        print(f"Гибридный поиск: '{query}' (α={alpha})")
         
-        # Получаем результаты от обоих методов
-        # Берем больше результатов для лучшего покрытия
         search_k = min(k * 2, len(self.documents))
         
         vector_results = self.vector_search(query_embedding, search_k)
         bm25_results = self.bm25_search(query, search_k)
         
-        print(f"  📊 Векторный поиск: {len(vector_results)} результатов")
-        print(f"  📊 BM25 поиск: {len(bm25_results)} результатов")
+        print(f"  Векторный поиск: {len(vector_results)} результатов")
+        print(f"  BM25 поиск: {len(bm25_results)} результатов")
         
-        # Нормализуем скоры для комбинирования
         combined_scores = {}
         
-        # Нормализуем векторные скоры (косинусное сходство уже в диапазоне [-1, 1])
-        # Приводим к диапазону [0, 1]
         if vector_results:
             max_vector_score = max(score for _, score in vector_results)
             min_vector_score = min(score for _, score in vector_results)
@@ -164,7 +143,6 @@ class HybridSearch:
                     'bm25_score': 0.0
                 }
         
-        # Нормализуем BM25 скоры
         if bm25_results:
             max_bm25_score = max(score for _, score in bm25_results)
             
@@ -181,7 +159,6 @@ class HybridSearch:
                         'bm25_score': normalized_score
                     }
         
-        # Вычисляем комбинированные скоры
         final_results = []
         for doc_id, scores in combined_scores.items():
             combined_score = (
@@ -189,10 +166,9 @@ class HybridSearch:
                 (1 - alpha) * scores['bm25_score']
             )
             final_results.append((scores['document'], combined_score))
-        
-        # Сортируем по убыванию комбинированного скора
+
         final_results.sort(key=lambda x: x[1], reverse=True)
         
-        print(f"  ✅ Итого: {len(final_results)} уникальных результатов")
+        print(f"  Итого: {len(final_results)} уникальных результатов")
         
         return final_results[:k]

@@ -21,7 +21,6 @@ class QueryIntentClassifier:
     """
 
     def __init__(self):
-        # Паттерны для определения типа запроса
         self.single_dish_patterns = [
             r'что в ([а-яё\s]+)',
             r'ингредиенты ([а-яё\s]+)',
@@ -51,7 +50,6 @@ class QueryIntentClassifier:
         """
         query_lower = query.lower().strip()
 
-        # Проверяем паттерны для одного блюда
         for pattern in self.single_dish_patterns:
             match = re.search(pattern, query_lower)
             if match:
@@ -61,8 +59,6 @@ class QueryIntentClassifier:
                     'dish_names': [dish_name],
                     'confidence': 0.8
                 }
-
-        # Проверяем паттерны для нескольких блюд
         for pattern in self.multi_dish_patterns:
             match = re.search(pattern, query_lower)
             if match:
@@ -80,7 +76,6 @@ class QueryIntentClassifier:
                         'confidence': 0.8
                     }
 
-        # По умолчанию - общий запрос
         return {
             'intent': 'general',
             'dish_names': [],
@@ -104,7 +99,7 @@ class RecipeReranker:
         logger.info(f"Загружаем реранкер: {model_name}")
         self.model = CrossEncoder(model_name)
         self.intent_classifier = QueryIntentClassifier()
-        logger.info("✅ Реранкер готов")
+        logger.info("Реранкер готов")
 
     def _calculate_name_similarity(self, query: str, dish_name: str) -> float:
         """
@@ -116,12 +111,10 @@ class RecipeReranker:
         if not query_words or not name_words:
             return 0.0
 
-        # Jaccard similarity + bonus for exact matches
         intersection = query_words.intersection(name_words)
         union = query_words.union(name_words)
         jaccard = len(intersection) / len(union) if union else 0.0
 
-        # Bonus for exact substring match
         exact_bonus = 0.3 if dish_name.lower() in query.lower() else 0.0
 
         return min(1.0, jaccard + exact_bonus)
@@ -191,23 +184,22 @@ class RecipeReranker:
         dish_names = intent_info['dish_names']
 
         if intent == 'single_dish' and dish_names:
-            # Для одного блюда - строгая фильтрация по названию
+
             target_name = dish_names[0].lower()
             filtered = []
 
             for doc in docs:
                 doc_name = doc.get('name', '').lower()
-                # Проверяем точное совпадение или вхождение
                 if target_name in doc_name or doc_name in target_name:
                     filtered.append(doc)
 
-            # Если точных совпадений нет, берем все документы
+
             if not filtered:
                 filtered = docs
 
             return {
                 'intent_info': intent_info,
-                'filtered_docs': filtered[:3],  # Максимум 3 для одного блюда
+                'filtered_docs': filtered[:3],  
                 'search_strategy': 'single_dish_focused'
             }
 
@@ -231,11 +223,10 @@ class RecipeReranker:
 
                 return {
                     'intent_info': intent_info,
-                    'filtered_docs': result_docs[:6],  # Максимум 6 для нескольких блюд
+                    'filtered_docs': result_docs[:6],
                     'search_strategy': 'multi_dish_targeted'
                 }
             else:
-                # Общий запрос о нескольких блюдах
                 return {
                     'intent_info': intent_info,
                     'filtered_docs': docs[:5],
@@ -243,7 +234,7 @@ class RecipeReranker:
                 }
 
         else:
-            # Общий запрос
+
             return {
                 'intent_info': intent_info,
                 'filtered_docs': docs[:5],

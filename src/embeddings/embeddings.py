@@ -33,13 +33,13 @@ class RecipeEmbedder:
         self.model = SentenceTransformer(model_name, device=device)
         self.embedding_dim = self.model.get_sentence_embedding_dimension()
 
-        print(f"✅ Модель загружена. Размерность эмбеддингов: {self.embedding_dim}")
+        print(f"Модель загружена. Размерность эмбеддингов: {self.embedding_dim}")
 
     def _encode_texts_sync(self, texts: List[str], batch_size: int = 32) -> np.ndarray:
         """
         Внутренний синхронный метод кодирования текстов.
         """
-        print(f"🔄 Векторизуем {len(texts)} текстов...")
+        print(f"Векторизуем {len(texts)} текстов...")
 
         # Предобработка текстов
         processed_texts = []
@@ -58,7 +58,7 @@ class RecipeEmbedder:
             convert_to_numpy=True
         )
 
-        print(f"✅ Создано {embeddings.shape[0]} эмбеддингов")
+        print(f"Создано {embeddings.shape[0]} эмбеддингов")
         return embeddings
 
     def encode_texts(self, texts: List[str], batch_size: int = 32) -> np.ndarray:
@@ -147,10 +147,9 @@ class RecipeEmbedder:
         try:
             # Проверяем наличие running event loop
             loop = asyncio.get_running_loop()
-            # Если есть loop, выполняем в executor
+
             with concurrent.futures.ThreadPoolExecutor() as executor:
                 future = executor.submit(self._get_similarity_sync, text1, text2)
                 return future.result()
         except RuntimeError:
-            # Нет event loop - синхронное выполнение
             return self._get_similarity_sync(text1, text2)

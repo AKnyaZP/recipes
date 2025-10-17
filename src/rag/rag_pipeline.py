@@ -2,7 +2,7 @@ from typing import List, Dict, Any, Optional
 import time
 from pathlib import Path
 import os
-from logging import getLogger
+from loguru import logger
 import asyncio
 import concurrent.futures
 
@@ -18,8 +18,7 @@ from rag.hybrid_search import HybridSearch
 from llm.llm import RecipeLLM
 from rag.reranker import RecipeReranker  # Новый импорт
 
-logger = getLogger(__name__)
-logger.setLevel("DEBUG")
+
 
 
 def _to_list_of_dicts(obj) -> Optional[List[Dict[str, Any]]]:
@@ -31,19 +30,13 @@ def _to_list_of_dicts(obj) -> Optional[List[Dict[str, Any]]]:
     if obj is None:
         return None
 
-    # already list of dicts?
     if isinstance(obj, list):
         return obj
 
-    # dict of lists -> convert by zipping
     if isinstance(obj, dict):
-        # если словарь вида {'train': [...]}
-        # пытаемся найти первую подходящую запись со списком элементов словарей
-        # или ключ со списком длинной > 0
         for k, v in obj.items():
             if isinstance(v, list) and v and isinstance(v[0], dict):
                 return v
-        # если dict of lists (columns) -> zip to records
         list_values = [v for v in obj.values() if isinstance(v, list)]
         if list_values:
             length = len(list_values[0])
@@ -61,19 +54,13 @@ def _to_list_of_dicts(obj) -> Optional[List[Dict[str, Any]]]:
                 pass
         return None
 
-    # objects with to_pandas / to_dict / to_list behaviour (HF Dataset, pandas.DataFrame)
     try:
-        # HF Dataset / DatasetDict -> try iterate or use to_dict
         if hasattr(obj, "to_dict"):
             d = obj.to_dict()
-            # if to_dict returns dict of lists -> convert
             if isinstance(d, dict):
-                # DatasetDict returns {split: Dataset}, handle that
-                # if values are lists -> zip to records
                 for v in d.values():
                     if isinstance(v, list) and v and isinstance(v[0], dict):
                         return v
-                # if d itself is columns -> zip
                 list_values = [v for v in d.values() if isinstance(v, list)]
                 if list_values:
                     length = len(list_values[0])
@@ -87,23 +74,18 @@ def _to_list_of_dicts(obj) -> Optional[List[Dict[str, Any]]]:
                         records.append(rec)
                     return records
 
-        # try pandas
         if hasattr(obj, "to_records") or hasattr(obj, "to_dict"):
             try:
-                # pandas.DataFrame -> to_dict(orient='records')
                 recs = obj.to_dict(orient="records")
                 if isinstance(recs, list):
                     return recs
             except Exception:
                 pass
 
-        # fallback: try to iterate and coerce to list
         try:
             lst = list(obj)
-            # ensure elements are dicts
             if lst and isinstance(lst[0], dict):
                 return lst
-            # if elements are tuples/lists and correspond to columns, try to convert
         except Exception:
             pass
     except Exception:
@@ -140,14 +122,14 @@ class RecipeRAGPipeline:
         """
         Настраивает компонент векторизации.
         """
-        logger.info("\n📝 Шаг 1: Настройка векторизации")
+        logger.info("\nШаг 1: Настройка векторизации")
         self.embedder = RecipeEmbedder()
 
     def _load_and_process_data_sync(self, max_recipes: int = None):
         """
         Внутренний синхронный метод загрузки и обработки данных.
         """
-        logger.info(f"\n📂 Шаг 2: Загрузка данных (лимит: {max_recipes or 'без ограничений'})")
+        logger.info(f"\n Шаг 2: Загрузка данных (лимит: {max_recipes or 'без ограничений'})")
 
         # compute processed file path at repo root /data/processed_recipes.json
         processed_file = Path(__file__).resolve().parents[2] / "data" / "processed_recipes.json"
@@ -156,44 +138,38 @@ class RecipeRAGPipeline:
         processed = None
         if processed_file.exists():
             try:
-                logger.info(f"📋 Найден файл с обработанными данными: {processed_file}")
+                logger.info(f" Найден файл с обработанными данными: {processed_file}")
                 processed = load_processed_data(str(processed_file))
             except Exception as e:
-                logger.warning(f"⚠️ Ошибка при загрузке processed_file: {e}")
+                logger.warning(f"Ошибка при загрузке processed_file: {e}")
                 processed = None
 
-        # 2) Если processed пуст или None -> загрузим сырые данные и обработаем
         if not processed:
-            logger.info("ℹ️ processed data отсутствуют/пусты — загружаем и обрабатываем исходные данные...")
+            logger.info("ℹprocessed data отсутствуют/пусты — загружаем и обрабатываем исходные данные...")
             hf_token = os.getenv("HF_TOKEN")
 
-            # Вызов load_povarenok_data: поддерживаем несколько возможных сигнатур
             raw_recipes = None
             try:
-                # try signature with max_recipes kwarg
                 raw_recipes = load_povarenok_data(max_recipes=max_recipes, use_auth_token=hf_token)
             except TypeError:
                 try:
-                    # common alternative: load_povarenok_data(dataset_id, max_recipes=...)
                     raw_recipes = load_povarenok_data("rogozinushka/povarenok-recipes", max_recipes=max_recipes, use_auth_token=hf_token)
                 except TypeError:
                     try:
-                        # try simple call without args
                         raw_recipes = load_povarenok_data()
                     except Exception as e:
-                        logger.error(f"⚠️ Не удалось вызвать load_povarenok_data автоматически: {e}")
+                        logger.error(f"Не удалось вызвать load_povarenok_data автоматически: {e}")
                         raw_recipes = None
                 except Exception as e:
-                    logger.error(f"⚠️ Ошибка при загрузке данных (second attempt): {e}")
+                    logger.error(f"Ошибка при загрузке данных (second attempt): {e}")
             except Exception as e:
-                logger.error(f"⚠️ Ошибка при загрузке данных (first attempt): {e}")
+                logger.error(f"Ошибка при загрузке данных (first attempt): {e}")
 
             if not raw_recipes:
                 raise RuntimeError("Не удалось загрузить исходные рецепты (raw_recipes пустые). Проверьте доступность датасета или HF_TOKEN.")
 
-            logger.info("⚙️ Обрабатываем сырые данные в документы...")
+            logger.info("Обрабатываем сырые данные в документы...")
             try:
-                # prepare_documents может принимать параметр max_recipes
                 try:
                     processed = prepare_documents(raw_recipes, max_recipes)
                 except TypeError:
@@ -204,25 +180,20 @@ class RecipeRAGPipeline:
             if not processed:
                 raise RuntimeError("prepare_documents вернул пустой результат")
 
-            # Сохраняем обработанные данные
             try:
-                # try signature save_processed_data(processed, path) or save_processed_data(path, processed)
                 try:
                     save_processed_data(processed, str(processed_file))
                 except TypeError:
                     save_processed_data(str(processed_file), processed)
-                logger.info(f"✅ Обработанные данные сохранены в {processed_file}")
+                logger.info(f"Обработанные данные сохранены в {processed_file}")
             except Exception as e:
-                logger.warning(f"⚠️ Не удалось сохранить processed data на диск: {e}")
+                logger.warning(f" Не удалось сохранить processed data на диск: {e}")
 
-        # 3) Нормализуем processed в список словарей
         normalized = _to_list_of_dicts(processed)
         if normalized is None:
-            # если обработанные данные всё ещё не в нужном формате, пробуем дополнительно load_processed_data если не делали ранее
             if not processed_file.exists():
                 raise RuntimeError("Processed data не удалось преобразовать в список словарей и кэш отсутствует.")
             else:
-                # попытка ещё раз загрузить через load_processed_data
                 try:
                     reloaded = load_processed_data(str(processed_file))
                     normalized = _to_list_of_dicts(reloaded)
@@ -232,13 +203,12 @@ class RecipeRAGPipeline:
             if normalized is None:
                 raise RuntimeError(f"Не удалось привести processed data к списку документов. Тип исходного объекта: {type(processed)}")
 
-        # применяем лимит, если нужно
         if max_recipes and len(normalized) > max_recipes:
             normalized = normalized[:max_recipes]
-            logger.info(f"🔬 Ограничиваем до {max_recipes} рецептов")
+            logger.info(f" Ограничиваем до {max_recipes} рецептов")
 
         self.documents = normalized
-        logger.info(f"✅ Готово к работе с {len(self.documents)} рецептами")
+        logger.info(f"Готово к работе с {len(self.documents)} рецептами")
 
     def load_and_process_data(self, max_recipes: int = None):
         """
@@ -249,21 +219,18 @@ class RecipeRAGPipeline:
             max_recipes: Ограничение количества рецептов для тестирования
         """
         try:
-            # Проверяем наличие running event loop
             loop = asyncio.get_running_loop()
-            # Если есть loop, выполняем в executor
             with concurrent.futures.ThreadPoolExecutor() as executor:
                 future = executor.submit(self._load_and_process_data_sync, max_recipes)
                 return future.result()
         except RuntimeError:
-            # Нет event loop - синхронное выполнение
             return self._load_and_process_data_sync(max_recipes)
 
     def _build_vector_index_sync(self, force_rebuild: bool = False):
         """
         Внутренний синхронный метод построения векторного индекса.
         """
-        logger.info("\n🗄️ Шаг 3: Построение векторного индекса")
+        logger.info("\n Шаг 3: Построение векторного индекса")
 
         if not self.embedder:
             raise ValueError("Сначала настройте векторизацию с помощью setup_embeddings()")
@@ -271,33 +238,31 @@ class RecipeRAGPipeline:
         if not self.documents or len(self.documents) == 0:
             raise ValueError("Сначала загрузите и обработайте данные с помощью load_and_process_data(); найдено 0 документов")
 
-        # Инициализируем векторное хранилище
         self.vector_store = FAISSVectorStore(self.embedder.embedding_dim)
 
-        # Проверяем существующий индекс
         index_path = Path(__file__).resolve().parents[2] / "data" / "faiss_index"
 
         if index_path.exists() and not force_rebuild:
-            logger.info("📂 Найден существующий индекс, загружаем...")
+            logger.info("Найден существующий индекс, загружаем...")
             try:
                 self.vector_store.load(str(index_path))
                 return
             except Exception as e:
-                logger.warning(f"⚠️ Ошибка загрузки индекса: {e}")
-                logger.info("🔨 Пересоздаем индекс...")
+                logger.warning(f"Ошибка загрузки индекса: {e}")
+                logger.info(" Пересоздаем индекс...")
 
         # Создаем новый индекс
-        logger.info("🔄 Векторизуем документы...")
+        logger.info("Векторизуем документы...")
         texts = [doc.get("full_text", "") for doc in self.documents]
         embeddings = self.embedder.encode_texts(texts)
 
-        logger.info("🏗️ Строим FAISS индекс...")
+        logger.info(" Строим FAISS индекс...")
         self.vector_store.build_index(embeddings, self.documents)
 
-        logger.info("💾 Сохраняем индекс...")
+        logger.info("Сохраняем индекс...")
         self.vector_store.save(str(index_path))
 
-        logger.info("✅ Векторный индекс готов")
+        logger.info("Векторный индекс готов")
 
     def build_vector_index(self, force_rebuild: bool = False):
         """
@@ -308,60 +273,57 @@ class RecipeRAGPipeline:
             force_rebuild: Принудительное пересоздание индекса
         """
         try:
-            # Проверяем наличие running event loop
             loop = asyncio.get_running_loop()
-            # Если есть loop, выполняем в executor
             with concurrent.futures.ThreadPoolExecutor() as executor:
                 future = executor.submit(self._build_vector_index_sync, force_rebuild)
                 return future.result()
         except RuntimeError:
-            # Нет event loop - синхронное выполнение
             return self._build_vector_index_sync(force_rebuild)
 
     def setup_hybrid_search(self):
         """
         Настраивает гибридный поиск.
         """
-        logger.info("\n🔍 Шаг 4: Настройка гибридного поиска")
+        logger.info("\n Шаг 4: Настройка гибридного поиска")
 
         if not self.vector_store or not self.documents:
             raise ValueError("Сначала постройте векторный индекс")
 
         self.hybrid_search = HybridSearch(self.vector_store, self.documents)
-        logger.info("✅ Гибридный поиск готов")
+        logger.info("Гибридный поиск готов")
 
     def setup_reranker(self):
         """
         Настраивает реранкер для улучшения качества поиска.
         """
-        logger.info("\n🎯 Шаг 4.5: Настройка реранкера")
+        logger.info("\n Шаг 4.5: Настройка реранкера")
 
         try:
             self.reranker = RecipeReranker("cross-encoder/ms-marco-MiniLM-L-6-v2")
-            logger.info("✅ Реранкер готов")
+            logger.info("Реранкер готов")
         except Exception as e:
-            logger.warning(f"⚠️ Не удалось загрузить реранкер: {e}. Продолжаем без реранкера.")
+            logger.warning(f"Не удалось загрузить реранкер: {e}. Продолжаем без реранкера.")
             self.reranker = None
 
     def setup_llm(self):
         """
         Настраивает языковую модель.
         """
-        logger.info("\n🤖 Шаг 5: Настройка языковой модели")
+        logger.info("\nШаг 5: Настройка языковой модели")
 
         self.llm = RecipeLLM("Qwen/Qwen2.5-1.5B-Instruct")
 
         # Выводим информацию о модели
         model_info = self.llm.get_model_info()
-        logger.info(f"📋 Модель: {model_info.get('model_name', 'unknown')}")
-        logger.info(f"📋 Параметры: ~{model_info.get('num_parameters', 0):,}")
-        logger.info("✅ LLM готова")
+        logger.info(f"Модель: {model_info.get('model_name', 'unknown')}")
+        logger.info(f"Параметры: ~{model_info.get('num_parameters', 0):,}")
+        logger.info("LLM готова")
 
     def _initialize_full_pipeline_sync(self, max_recipes: int = None, force_rebuild: bool = False):
         """
         Внутренний синхронный метод полной инициализации.
         """
-        logger.info("🚀 Полная инициализация RAG пайплайна")
+        logger.info("Полная инициализация RAG пайплайна")
 
         start_time = time.time()
 
@@ -370,12 +332,12 @@ class RecipeRAGPipeline:
         self.load_and_process_data(max_recipes)
         self.build_vector_index(force_rebuild)
         self.setup_hybrid_search()
-        self.setup_reranker()  # Новый шаг
+        self.setup_reranker()  
         self.setup_llm()
 
         elapsed = time.time() - start_time
-        logger.info(f"\n✅ Полная инициализация завершена за {elapsed:.1f}с")
-        logger.info("🎉 RAG пайплайн готов к работе!")
+        logger.info(f"\nПолная инициализация завершена за {elapsed:.1f}с")
+        logger.info("RAG пайплайн готов к работе!")
 
     def initialize_full_pipeline(self, max_recipes: int = None, force_rebuild: bool = False):
         """
@@ -387,14 +349,11 @@ class RecipeRAGPipeline:
             force_rebuild: Принудительное пересоздание индекса
         """
         try:
-            # Проверяем наличие running event loop
             loop = asyncio.get_running_loop()
-            # Если есть loop, выполняем в executor
             with concurrent.futures.ThreadPoolExecutor() as executor:
                 future = executor.submit(self._initialize_full_pipeline_sync, max_recipes, force_rebuild)
                 return future.result()
         except RuntimeError:
-            # Нет event loop - синхронное выполнение
             return self._initialize_full_pipeline_sync(max_recipes, force_rebuild)
 
     def _search_recipes_sync(self, query: str, k: int = 5) -> List[tuple]:
@@ -404,10 +363,8 @@ class RecipeRAGPipeline:
         if not self.hybrid_search or not self.embedder:
             raise ValueError("Пайплайн не инициализирован")
 
-        # Векторизуем запрос
         query_embedding = self.embedder.encode_query(query)
 
-        # Выполняем гибридный поиск с увеличенным k для реранкинга
         initial_k = min(k * 3, 20)  # Берем больше кандидатов для реранкинга
         raw_results = self.hybrid_search.hybrid_search(
             query=query,
@@ -416,17 +373,14 @@ class RecipeRAGPipeline:
             alpha=0.6,
         )
 
-        # Применяем реранкинг если доступен
         if self.reranker and raw_results:
-            # Извлекаем документы из результатов
             docs = [doc for doc, _ in raw_results]
 
-            # Фильтруем по намерению
             filter_result = self.reranker.filter_by_intent(query, docs)
             filtered_docs = filter_result['filtered_docs']
             intent_info = filter_result['intent_info']
 
-            logger.info(f"🎯 Определено намерение: {intent_info['intent']} (confidence: {intent_info['confidence']:.2f})")
+            logger.info(f" Определено намерение: {intent_info['intent']} (confidence: {intent_info['confidence']:.2f})")
 
             # Применяем реранкинг
             if filtered_docs:
@@ -434,7 +388,7 @@ class RecipeRAGPipeline:
                 # Возвращаем в формате (doc, score)
                 return [(doc, i) for i, doc in enumerate(reranked_docs)]
             else:
-                logger.warning("⚠️ Фильтрация по намерению не вернула результатов")
+                logger.warning(" Фильтрация по намерению не вернула результатов")
 
         # Fallback: возвращаем исходные результаты
         return raw_results[:k]
@@ -445,14 +399,11 @@ class RecipeRAGPipeline:
         Автоматически определяет sync/async контекст.
         """
         try:
-            # Проверяем наличие running event loop
             loop = asyncio.get_running_loop()
-            # Если есть loop, выполняем в executor
             with concurrent.futures.ThreadPoolExecutor() as executor:
                 future = executor.submit(self._search_recipes_sync, query, k)
                 return future.result()
         except RuntimeError:
-            # Нет event loop - синхронное выполнение
             return self._search_recipes_sync(query, k)
 
     def _ask_sync(self, question: str) -> Dict[str, Any]:
@@ -462,16 +413,14 @@ class RecipeRAGPipeline:
         if not all([self.hybrid_search, self.embedder, self.llm]):
             raise ValueError("Пайплайн не полностью инициализирован")
 
-        logger.info(f"\n❓ Вопрос: {question}")
+        logger.info(f"\nВопрос: {question}")
 
         start_time = time.time()
 
-        # Выполняем поиск релевантных рецептов с реранкингом
         search_results = self._search_recipes_sync(question, k=5)
 
         search_time = time.time() - start_time
 
-        # Генерируем ответ с улучшенным контекстом
         response = self.llm.generate_response(question, search_results)
 
         total_time = time.time() - start_time
@@ -493,8 +442,8 @@ class RecipeRAGPipeline:
             "timing": {"search_time": round(search_time, 3), "total_time": round(total_time, 3)},
         }
 
-        logger.info(f"💬 Ответ: {response}")
-        logger.info(f"⏱️ Время: {total_time:.3f}с (поиск: {search_time:.3f}с)")
+        logger.info(f" Ответ: {response}")
+        logger.info(f"Время: {total_time:.3f}с (поиск: {search_time:.3f}с)")
 
         return result
 
@@ -504,12 +453,9 @@ class RecipeRAGPipeline:
         Автоматически определяет sync/async контекст.
         """
         try:
-            # Проверяем наличие running event loop
             loop = asyncio.get_running_loop()
-            # Если есть loop, выполняем в executor
             with concurrent.futures.ThreadPoolExecutor() as executor:
                 future = executor.submit(self._ask_sync, question)
                 return future.result()
         except RuntimeError:
-            # Нет event loop - синхронное выполнение
             return self._ask_sync(question)

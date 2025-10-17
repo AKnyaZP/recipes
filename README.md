@@ -8,7 +8,7 @@ Recipe RAG
 git clone https://github.com/AKnyaZP/recipes.git
 ```
 
-2. В директорию `temp/` добавить .env c `HF_TOKEN = ""`
+2. В директорию `temp/` добавить .env c `HF_TOKEN = ""` (опционально)
 
 3. Установить зависимости
 ```bash
